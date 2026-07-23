@@ -1,0 +1,2 @@
+org.springframework.boot.env.EnvironmentPostProcessor=\
+  com.stubserver.backend.config.CommonConfigEnvironmentPostProcessor

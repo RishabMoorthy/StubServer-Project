@@ -1,0 +1,44 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# STATIC Java-Backend configuration (same across environments).
+#
+# Env-specific values (server port, cors-origin, prod-url, core-server,
+# database) live in the common hibernate config.properties and are injected by
+# CommonConfigEnvironmentPostProcessor. Do NOT put those here.
+# ─────────────────────────────────────────────────────────────────────────────
+
+spring:
+  mail:
+    host: smtppva.prod.com
+    port: 25
+    properties:
+      mail:
+        smtp:
+          auth: false
+          ssl:
+            trust: "*"
+
+app:
+  # JWT secrets — plain text (kept here in the backend, not encrypted)
+  jwt:
+    access-secret: CHANGE_ME
+    refresh-secret: CHANGE_ME
+    reset-secret: CHANGE_ME
+    access-expires-seconds: 900        # 15 minutes
+    refresh-expires-seconds: 1296000   # 15 days
+    reset-expires-seconds: 900         # 15 minutes
+
+  # File paths — relative to the JAR's working dir: stubServerAuth-backend/build,
+  # nested under "StubServer Frontend". ../../../stubServer climbs build -> backend ->
+  # "StubServer Frontend" -> StubServerPortal, then into the stubServer folder on any
+  # disk/server, no edits per env.
+  stub-base: ../../../stubServer
+  server-log-dir: ${app.stub-base}/stubServerFiles/logs
+  reqresp-log-dir: ${app.stub-base}/stubServerFiles/logs/reqreslogs
+  dataset-paths: ${app.stub-base}/stubServerFiles/vsfiles/dataset
+  batch:
+    java-start: ${app.stub-base}/start.bat
+    java-stop: ${app.stub-base}/stop.bat
+
+  # Mail
+  mail:
+    from: no-reply@domain.com
