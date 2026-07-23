@@ -1,0 +1,13 @@
+-- VS_LIVEURLS (SQL Server) — created only if missing.
+IF OBJECT_ID('${schema}.VS_LIVEURLS', 'U') IS NULL
+BEGIN
+    CREATE TABLE ${schema}.VS_LIVEURLS (
+        VSURLID     BIGINT NOT NULL,
+        VSID        BIGINT NOT NULL,
+        HOST        VARCHAR(200) NULL,
+        ISACTIVE    VARCHAR(2) NULL,
+        UPDATETIME  DATETIME NULL,
+        UPDATEDBY   VARCHAR(50) NULL,
+        CONSTRAINT PK_VS_LIVEURLS PRIMARY KEY (VSURLID)
+    );
+END;

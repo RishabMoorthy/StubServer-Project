@@ -1,0 +1,21 @@
+-- READYAPI_DAILY_METRICS (Oracle) — created only if missing (ignores ORA-00955).
+BEGIN
+    EXECUTE IMMEDIATE q'[
+        CREATE TABLE ${schema}.READYAPI_DAILY_METRICS (
+            METRICSID       NUMBER(15,0) NOT NULL,
+            TRANSDATE       DATE NOT NULL,
+            VSNAME          VARCHAR2(150),
+            "COUNT"         NUMBER(30,0),
+            VIRTSERVERNAME  VARCHAR2(50) DEFAULT '10.44.16.44',
+            ENVTYPE         VARCHAR2(25),
+            CONSTRAINT METRICSID_UNIQUE PRIMARY KEY (METRICSID),
+            CONSTRAINT METRICS_UNIQUE UNIQUE (TRANSDATE, VSNAME, VIRTSERVERNAME)
+        )
+    ]';
+EXCEPTION
+    WHEN OTHERS THEN
+        IF SQLCODE != -955 THEN
+            RAISE;
+        END IF;
+END;
+/

@@ -1,0 +1,11 @@
+-- READYAPI_PORT_RANGE (SQL Server) — created only if missing.
+IF OBJECT_ID('${schema}.READYAPI_PORT_RANGE', 'U') IS NULL
+BEGIN
+    CREATE TABLE ${schema}.READYAPI_PORT_RANGE (
+        PORTID      BIGINT       NOT NULL,
+        APPNAME     VARCHAR(100) NOT NULL,
+        PORTS       VARCHAR(150) NULL,
+        UPDATETIME  DATETIME2    NULL,
+        UPDATEDBY   VARCHAR(50)  NULL
+    );
+END;

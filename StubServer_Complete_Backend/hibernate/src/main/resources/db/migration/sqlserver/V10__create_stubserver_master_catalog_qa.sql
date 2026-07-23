@@ -1,0 +1,16 @@
+-- STUBSERVER_MASTER_CATALOG_QA (SQL Server) — created only if missing.
+IF OBJECT_ID('${schema}.STUBSERVER_MASTER_CATALOG_QA', 'U') IS NULL
+BEGIN
+    CREATE TABLE ${schema}.STUBSERVER_MASTER_CATALOG_QA (
+        MASTERID            BIGINT NOT NULL,
+        VSNAME              VARCHAR(150) NOT NULL,
+        UPDATETIME          DATETIME NULL,
+        STATUS              VARCHAR(50) NULL,
+        BACKENDAPPLICATION  VARCHAR(300) NULL,
+        BACKENDTYPE         VARCHAR(10) NULL,
+        ENV_TYPE            VARCHAR(20) NULL,
+        [GROUP]             VARCHAR(100) NULL,
+        PORT                INT NULL,
+        CONSTRAINT PK_STUBSERVER_MASTER_CATALOG_QA PRIMARY KEY (MASTERID)
+    );
+END;
