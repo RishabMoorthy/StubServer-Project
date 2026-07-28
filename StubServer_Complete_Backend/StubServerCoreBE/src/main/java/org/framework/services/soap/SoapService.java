@@ -213,7 +213,7 @@ public class SoapService extends AbstractService {
                     if (response.getHeader("Content-Type") == null || response.getHeader("Content-Type").isEmpty()) {
                         // If you know your service/endpoint is SOAP 1.2, use application/soap+xml
                         // instead.
-                        response.setContentType("application/xml");
+                        response.setContentType("application/xml; charset=UTF-8");
                         System.out.println("I am setting content type");
                     }
 
