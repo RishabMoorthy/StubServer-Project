@@ -1,30 +1,52 @@
 package org.framework.config;
 
+import com.stubio.util.Endpoint;
+import com.stubio.util.ExecutionMode;
+import com.stubio.util.KeyStore;
+import com.stubio.util.SecuritySettings;
+import com.stubio.util.StubOperation;
+import com.stubio.util.VirtualServiceObject;
+
 import org.framework.core.BaseRoute;
 import org.framework.core.EventHandler;
 import org.framework.core.RequestHandler;
-import org.framework.core.RouteMatcher;
 import org.framework.datasource.DataSourceService;
 import org.framework.properties.Properties;
 
+import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Matcher;
 
+/**
+ * Deployed-service configuration.
+ *
+ * <p>
+ * The parsed configuration is now the {@link VirtualServiceObject} produced by
+ * com.stubio's VirtualServiceMapper - this class holds it directly rather than
+ * copying its fields into a parallel model. Everything below is either a
+ * delegating accessor onto that object, or genuinely runtime state that has no
+ * place in the parsed model (request handler, data source service, live xml
+ * content, transaction counters).
+ *
+ * <p>
+ * The four script fields are the one exception: RestService/SoapService rewrite
+ * script text at start-up (the com.vs.met.* class remapping), so they are held
+ * locally and seeded from the virtual service's CustomScripts.
+ */
 public class ServiceConfig {
-    public String getServiceName() {
-        return serviceName;
-    }
 
-    public void setServiceName(String serviceName) {
-        this.serviceName = serviceName;
-    }
+    public static final String SCRIPT_VS_START = "VS Start";
+    public static final String SCRIPT_VS_STOP = "VS Stop";
+    public static final String SCRIPT_ON_REQUEST = "On Request";
+    public static final String SCRIPT_ON_RESPONSE = "On Response";
 
-    private String keystorePath;
-    private String keystorePassword;
-    private String serviceName;
+    /** The parsed configuration, straight from the new parser. */
+    private VirtualServiceObject virtualService;
+
+    // ---- runtime-only state ----
     private String userName;
     private Properties properties;
-    private String wsdlContent;
+    private String xmlFileContent;
+
     private String onRequestScript;
     private String startScript;
     private String stopScript;
@@ -36,42 +58,211 @@ public class ServiceConfig {
     private RequestHandler requestHandler;
     private EventHandler eventHandler;
 
-    private int delay = 0;
-
     private DataSourceService dataSourceService;
-
-    public int getDelayMs() {
-        return delayMs;
-    }
-
-    public void setDelayMs(int delayMs) {
-        this.delayMs = delayMs;
-    }
 
     private int delayMs = 0;
     private String delayMode = "FIXED";
     private int lowerMs = 0;
     private int upperMs = 0;
     private double medianMs = 0.0;
+    private double standardDeviation = 0.0;
+
+    /** Legacy TCP routes. REST/SOAP dispatch off the virtual service model. */
+    private List<BaseRoute> routes;
+
+    // ---- the parsed model ----
+
+    public VirtualServiceObject getVirtualService() {
+        return virtualService;
+    }
+
+    /**
+     * Installs the parsed virtual service and seeds the mutable script fields
+     * from its CustomScripts block.
+     */
+    public void setVirtualService(VirtualServiceObject virtualService) {
+        this.virtualService = virtualService;
+        this.startScript = scriptText(SCRIPT_VS_START);
+        this.stopScript = scriptText(SCRIPT_VS_STOP);
+        this.onRequestScript = scriptText(SCRIPT_ON_REQUEST);
+        this.afterRequestScript = scriptText(SCRIPT_ON_RESPONSE);
+    }
+
+    private String scriptText(String executionType) {
+        if (virtualService == null || virtualService.getCustomScripts() == null) {
+            return null;
+        }
+        com.stubio.util.Script script = virtualService.getCustomScripts().get(executionType);
+        if (script == null || script.getScript() == null || script.getScript().isBlank()) {
+            return null;
+        }
+        return script.getScript().trim();
+    }
+
+    // ---- delegating accessors onto the parsed model ----
+
+    public String getServiceName() {
+        return virtualService == null ? null : virtualService.getVsName();
+    }
+
+    public int getPort() {
+        return virtualService == null ? 0 : virtualService.getPort();
+    }
+
+    public String getHost() {
+        return virtualService == null ? null : virtualService.getHost();
+    }
+
+    public String getContextPath() {
+        return virtualService == null ? null : virtualService.getContextPath();
+    }
+
+    /** "Rest" / "Soap" - AbstractServiceFactory and the DB layer expect this casing. */
+    public String getType() {
+        if (virtualService == null || virtualService.getVsType() == null) {
+            return null;
+        }
+        return "soap".equalsIgnoreCase(virtualService.getVsType()) ? "Soap" : "Rest";
+    }
+
+    public String getAutoStart() {
+        return virtualService != null && virtualService.isAutoStart() ? "true" : "false";
+    }
+
+    public String getHttpSecure() {
+        return virtualService != null && virtualService.isSecured() ? "true" : "false";
+    }
+
+    public String getProtocol() {
+        return virtualService != null && virtualService.isSecured() ? "HTTPS" : "HTTP";
+    }
+
+    /** Service-level delay - was con:minApplicationDelay, now Config/ResponseDelay. */
+    public int getDelay() {
+        return virtualService == null ? 0 : virtualService.getResponseDelay();
+    }
+
+    public String getWsdlContent() {
+        if (virtualService == null || virtualService.getWsdlMetaData() == null) {
+            return null;
+        }
+        return virtualService.getWsdlMetaData().getWsdlText();
+    }
+
+    public List<Endpoint> getEndpoints() {
+        if (virtualService == null || virtualService.getRestService() == null) {
+            return new ArrayList<>();
+        }
+        return new ArrayList<>(virtualService.getRestService().getEndpoints());
+    }
+
+    public List<StubOperation> getStubOperations() {
+        if (virtualService == null || virtualService.getSoapService() == null) {
+            return new ArrayList<>();
+        }
+        return new ArrayList<>(virtualService.getSoapService().getStubOperations());
+    }
+
+    public boolean isDatasourceEnabled() {
+        return dataSourceService != null && dataSourceService.getRegistry() != null;
+    }
+
+    // ---- live invocation, from ExecutionMode ----
 
     public boolean isRouteModeEnabled() {
-        return routeModeEnabled;
+        ExecutionMode mode = executionMode();
+        return mode != null && "Live Invocation".equalsIgnoreCase(trimToEmpty(mode.getExeModeValue()));
     }
 
-    public void setRouteModeEnabled(boolean routeModeEnabled) {
-        this.routeModeEnabled = routeModeEnabled;
-    }
-
+    /** Base URL of the active LiveURL - was the routeEndpoint attribute. */
     public String getRouteEndpoint() {
-        return routeEndpoint;
+        ExecutionMode mode = executionMode();
+        if (mode == null || mode.getLiveURLs() == null || mode.getLiveURLs().isEmpty()) {
+            return "";
+        }
+
+        ExecutionMode.LiveURL selected = null;
+        for (ExecutionMode.LiveURL liveURL : mode.getLiveURLs()) {
+            if (liveURL.isActive()) {
+                selected = liveURL;
+                break;
+            }
+        }
+        if (selected == null) {
+            selected = mode.getLiveURLs().get(0);
+        }
+
+        String transport = trimToEmpty(selected.getTransportType());
+        StringBuilder endpoint = new StringBuilder(transport.isEmpty() ? "http" : transport);
+        endpoint.append("://").append(trimToEmpty(selected.getHost()));
+
+        String port = trimToEmpty(selected.getPort());
+        if (!port.isEmpty()) {
+            endpoint.append(":").append(port);
+        }
+        endpoint.append(trimToEmpty(selected.getBasePath()));
+
+        return endpoint.toString();
     }
 
-    public void setRouteEndpoint(String routeEndpoint) {
-        this.routeEndpoint = routeEndpoint;
+    /** ExecutionMode sits at root for REST and inside SOAPService for SOAP. */
+    private ExecutionMode executionMode() {
+        if (virtualService == null) {
+            return null;
+        }
+        ExecutionMode mode = virtualService.getExeMode();
+        boolean rootEmpty = mode == null || trimToEmpty(mode.getExeModeValue()).isEmpty();
+        if (rootEmpty && virtualService.getSoapService() != null) {
+            return virtualService.getSoapService().getExeMode();
+        }
+        return mode;
     }
 
-    private boolean routeModeEnabled = false;
-    private String routeEndpoint;
+    // ---- keystore, from SecuritySettings ----
+
+    public String getKeystorePath() {
+        KeyStore keyStore = keyStore();
+        return keyStore == null ? null : keyStore.getPath();
+    }
+
+    public String getKeystorePassword() {
+        KeyStore keyStore = keyStore();
+        return keyStore == null ? null : keyStore.getKeyPass();
+    }
+
+    public String getKeystoreType() {
+        KeyStore keyStore = keyStore();
+        return keyStore == null ? null : keyStore.getType();
+    }
+
+    public boolean isClientAuth() {
+        SecuritySettings settings = securitySettings();
+        return settings != null && settings.isClientAuth();
+    }
+
+    private KeyStore keyStore() {
+        SecuritySettings settings = securitySettings();
+        if (settings == null || settings.getKeyStoreMap() == null) {
+            return null;
+        }
+        return settings.getKeyStoreMap().get("KeyStore");
+    }
+
+    private SecuritySettings securitySettings() {
+        if (virtualService == null) {
+            return null;
+        }
+        if ("soap".equalsIgnoreCase(virtualService.getVsType())) {
+            return virtualService.getSoapService() == null
+                    ? null
+                    : virtualService.getSoapService().getSecuritySettings();
+        }
+        return virtualService.getRestService() == null
+                ? null
+                : virtualService.getRestService().getSecuritySettings();
+    }
+
+    // ---- runtime state ----
 
     public DataSourceService getDataSourceService() {
         return dataSourceService;
@@ -81,61 +272,12 @@ public class ServiceConfig {
         this.dataSourceService = dataSourceService;
     }
 
-    public double getStandardDeviation() {
-        return standardDeviation;
-    }
-
-    public void setStandardDeviation(double standardDeviation) {
-        this.standardDeviation = standardDeviation;
-    }
-
-    private double standardDeviation = 0.0;
-    private int port;
-    private String autoStart = "false";
-    String httpSecure;
-    private String protocol;
-    private List<BaseRoute> routes; // For REST, TCP, SOAP
-    private String type;
-    private boolean datasourceEnabled;
-
-    public boolean isDatasourceEnabled() {
-        return this.datasourceEnabled;
-    }
-
-    public void setDatasourceEnabled(boolean datasourceEnabled) {
-        this.datasourceEnabled = datasourceEnabled;
-    }
-
-    public String getHttpSecure() {
-        return httpSecure;
-    }
-
-    public void setHttpSecure(String httpSecure) {
-        this.httpSecure = httpSecure;
-    }
-
-    public String getWsdlContent() {
-        return wsdlContent;
-    }
-
-    public void setWsdlContent(String wsdlContent) {
-        this.wsdlContent = wsdlContent;
-    }
-
     public Properties getProperties() {
         return properties;
     }
 
     public void setProperties(Properties properties) {
         this.properties = properties;
-    }
-
-    public int getDelay() {
-        return delay;
-    }
-
-    public void setDelay(int delay) {
-        this.delay = delay;
     }
 
     public String getUserName() {
@@ -152,24 +294,6 @@ public class ServiceConfig {
 
     public void setXmlFileContent(String xmlFileContent) {
         this.xmlFileContent = xmlFileContent;
-    }
-
-    private String xmlFileContent;
-
-    public String getAutoStart() {
-        return autoStart;
-    }
-
-    public void setAutoStart(String autoStart) {
-        this.autoStart = autoStart;
-    }
-
-    public String getType() {
-        return type;
-    }
-
-    public void setType(String type) {
-        this.type = type;
     }
 
     public String getOnRequestScript() {
@@ -202,54 +326,6 @@ public class ServiceConfig {
 
     public void setAfterRequestScript(String afterRequestScript) {
         this.afterRequestScript = afterRequestScript;
-    }
-
-    public String getDelayMode() {
-        return delayMode;
-    }
-
-    public void setDelayMode(String delayMode) {
-        this.delayMode = delayMode;
-    }
-
-    public int getLowerMs() {
-        return lowerMs;
-    }
-
-    public void setLowerMs(int lowerMs) {
-        this.lowerMs = lowerMs;
-    }
-
-    public int getUpperMs() {
-        return upperMs;
-    }
-
-    public void setUpperMs(int upperMs) {
-        this.upperMs = upperMs;
-    }
-
-    public double getMedianMs() {
-        return medianMs;
-    }
-
-    public void setMedianMs(double medianMs) {
-        this.medianMs = medianMs;
-    }
-
-    public int getPort() {
-        return port;
-    }
-
-    public void setPort(int port) {
-        this.port = port;
-    }
-
-    public String getProtocol() {
-        return protocol;
-    }
-
-    public void setProtocol(String protocol) {
-        this.protocol = protocol;
     }
 
     public List<BaseRoute> getRoutes() {
@@ -292,19 +368,55 @@ public class ServiceConfig {
         this.delayPercent = delayPercent;
     }
 
-    public String getKeystorePath() {
-        return keystorePath;
+    public int getDelayMs() {
+        return delayMs;
     }
 
-    public void setKeystorePath(String keyStorePath) {
-        this.keystorePath = keyStorePath;
+    public void setDelayMs(int delayMs) {
+        this.delayMs = delayMs;
     }
 
-    public String getKeystorePassword() {
-        return keystorePassword;
+    public String getDelayMode() {
+        return delayMode;
     }
 
-    public void setKeystorePassword(String keyStorePassword) {
-        this.keystorePassword = keyStorePassword;
+    public void setDelayMode(String delayMode) {
+        this.delayMode = delayMode;
+    }
+
+    public int getLowerMs() {
+        return lowerMs;
+    }
+
+    public void setLowerMs(int lowerMs) {
+        this.lowerMs = lowerMs;
+    }
+
+    public int getUpperMs() {
+        return upperMs;
+    }
+
+    public void setUpperMs(int upperMs) {
+        this.upperMs = upperMs;
+    }
+
+    public double getMedianMs() {
+        return medianMs;
+    }
+
+    public void setMedianMs(double medianMs) {
+        this.medianMs = medianMs;
+    }
+
+    public double getStandardDeviation() {
+        return standardDeviation;
+    }
+
+    public void setStandardDeviation(double standardDeviation) {
+        this.standardDeviation = standardDeviation;
+    }
+
+    private String trimToEmpty(String value) {
+        return value == null ? "" : value.trim();
     }
 }

@@ -1,5 +1,6 @@
 package com.stubio.parsers;
 
+import com.stubio.util.ExecutionMode;
 import com.stubio.util.SOAPService;
 import com.stubio.util.StubOperation;
 import com.stubio.util.VirtualServiceObject;
@@ -37,6 +38,26 @@ public final class SoapServiceParser {
                                 StubOperationParser.parse(
                                         child,
                                         vso));
+
+                // Unlike RestService, a SOAPService nests these three blocks
+                // inside itself. Without these branches a SOAP virtual service
+                // silently loses its scripts, response delay and live-invocation
+                // settings.
+                case "ExecutionMode" -> {
+
+                    ExecutionMode executionMode =
+                            ExecutionModeParser.parse(child);
+
+                    service.setExeMode(executionMode);
+                    vso.setExeMode(executionMode);
+                }
+
+                case "CustomScripts" ->
+                        vso.setCustomScripts(
+                                ScriptParser.parseCustomScripts(child));
+
+                case "Config" ->
+                        ConfigParser.parse(child, vso);
             }
         }
 

@@ -123,7 +123,6 @@ public class CustomMethods {
             switch (mode) {
                 case "FIXED": {
                     Logger.getInstance().info("mode " + mode + "  " + config.getDelayMs());
-                    config.setDelay(config.getDelayMs());
                     return config.getDelayMs();
                 }
                 case "RANDOM": {

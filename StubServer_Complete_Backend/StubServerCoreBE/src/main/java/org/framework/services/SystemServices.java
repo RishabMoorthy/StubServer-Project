@@ -2,6 +2,7 @@ package org.framework.services;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import com.stubio.util.VirtualServiceObject;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.MultipartConfigElement;
 import jakarta.servlet.http.Part;
@@ -802,7 +803,7 @@ public class SystemServices {
                     return;
 
                 JSONObject response = new JSONObject();
-                ParsedXMLObject parsedObj = null;
+                VirtualServiceObject parsedObj = null;
                 String user = "";
                 String isRedeploy = "false";
                 String forceDeploy = "";
@@ -843,14 +844,15 @@ public class SystemServices {
 
                         System.out.println("PARTNER = " + backendApplication);
 
+                        // parseXml now throws on a bad file; the outer catch reports it.
                         parsedObj = ServerManager.getInstance().parseXml(extractedFile);
-                        System.out.println("service name : " + parsedObj.getName());
-                        if (Utility.getInstance().isExistingService(parsedObj.getName(), parsedObj.getPort())) {
+                        System.out.println("service name : " + parsedObj.getVsName());
+                        if (Utility.getInstance().isExistingService(parsedObj.getVsName(), parsedObj.getPort())) {
                             storetoMasterCatalog = "true";
                         }
 
-                        if (parsedObj.getexception() == null || parsedObj.getexception().getMessage().isEmpty()) {
-                            String fileName = extractedFile != null ? parsedObj.getName() : null;
+                        {
+                            String fileName = extractedFile != null ? parsedObj.getVsName() : null;
                             if (extractedFile != null) {
                                 AbstractService currentService = ServerManager.getInstance().getService(fileName);
 
@@ -866,7 +868,7 @@ public class SystemServices {
                                 if (currentService != null && "false".equals(isRedeploy)) {
                                     response.put("message", "Service is already Running");
                                     response.put("port", parsedObj.getPort());
-                                    response.put("serviceName", parsedObj.getName());
+                                    response.put("serviceName", parsedObj.getVsName());
                                     resp.setStatus(HttpServletResponse.SC_OK);
                                     writeJson(resp, response);
                                     return;
@@ -883,7 +885,7 @@ public class SystemServices {
                                             System.out.println("Service Name: " + name);
                                             if (service.getConfig().getPort() == parsedObj.getPort()) {
                                                 ServerManager.getInstance().stopService(name);
-                                                // ServerManager.getInstance().startService(parsedObj.getName());
+                                                // ServerManager.getInstance().startService(parsedObj.getVsName());
                                             }
 
                                         }
@@ -893,7 +895,7 @@ public class SystemServices {
                                     if (service != null) {
                                         response.put("message", "Service is already Running on same port");
                                         response.put("port", parsedObj.getPort());
-                                        response.put("serviceName", parsedObj.getName());
+                                        response.put("serviceName", parsedObj.getVsName());
                                         resp.setStatus(HttpServletResponse.SC_OK);
                                         writeJson(resp, response);
                                         return;
@@ -902,25 +904,22 @@ public class SystemServices {
 
                                     if (ServerManager.getInstance().deployService(parsedObj, true, user, backendApplication,
                                             group, backendType, Boolean.parseBoolean(storetoMasterCatalog), envType)) {
-                                        RequestTracker.removeLogs(parsedObj.getName());
+                                        RequestTracker.removeLogs(parsedObj.getVsName());
                                         response.put("message", "Service Deployed Successfully");
                                         response.put("port", parsedObj.getPort());
-                                        response.put("serviceName", parsedObj.getName());
+                                        response.put("serviceName", parsedObj.getVsName());
                                         UploadFile(extractedFile, fileName);
                                         resp.setStatus(HttpServletResponse.SC_OK);
-                                        Logger.getInstance().info("Service Deployed Successfully " + parsedObj.getName());
+                                        Logger.getInstance().info("Service Deployed Successfully " + parsedObj.getVsName());
                                     } else {
                                         response.put("message", "Service Not Deployed");
                                         resp.setStatus(HttpServletResponse.SC_OK);
-                                        Logger.getInstance().info("Service Not Successfully " + parsedObj.getName());
+                                        Logger.getInstance().info("Service Not Successfully " + parsedObj.getVsName());
                                     }
                                 } else {
                                     response.put("message", "File Extract Failed");
                                     resp.setStatus(HttpServletResponse.SC_BAD_REQUEST);
                                 }
-                            } else {
-                                response.put("message", Logger.getInstance().exceptionMsg(parsedObj.getexception()));
-                                resp.setStatus(HttpServletResponse.SC_BAD_REQUEST);
                             }
                             writeJson(resp, response);
                         } else {
@@ -928,7 +927,7 @@ public class SystemServices {
                             writeJson(resp, error("Unsupported Media Type", "Use multipart/form-data"));
                         }
                 } catch (Exception e) {
-                    String svc = parsedObj != null ? parsedObj.getName() : "unknown";
+                    String svc = parsedObj != null ? parsedObj.getVsName() : "unknown";
                     Logger.getInstance().error(svc, e);
                     resp.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
                     writeJson(resp, error("Error", "Something went wrong"));
@@ -1046,7 +1045,6 @@ public class SystemServices {
                     port = String.valueOf(service.getConfig().getPort());
                     status = service.isRunning() ? "Running" : "Stopped";
                     type = service.getConfig().getType();
-                    int size = service.getConfig().getRoutes().size();
                     String httpSecure = service.getConfig().getHttpSecure();
 
                     String protocol;
@@ -1060,14 +1058,22 @@ public class SystemServices {
                         protocol = "";
                     }
 
-                    for (int i = 0; i < size; i++) {
-                        if (type.equals("Rest")) {
-                            System.out.println("path is " + service.getConfig().getRoutes().get(i).getPath());
+                    if ("Rest".equals(type)) {
+                        for (com.stubio.util.Endpoint endpoint : service.getConfig().getEndpoints()) {
+                            System.out.println("path is " + endpoint.getPath());
                             endpoints.add(protocol + CustomMethods.getLocalHostAddress() + ":" + port
-                                    + service.getConfig().getRoutes().get(i).getPath());
-                        } else {
+                                    + endpoint.getPath());
+                        }
+                    } else if ("Soap".equals(type)) {
+                        for (com.stubio.util.StubOperation operation : service.getConfig().getStubOperations()) {
                             endpoints.add(protocol + CustomMethods.getLocalHostAddress() + ":" + port);
-                            operationName.add(service.getConfig().getRoutes().get(i).getName());
+                            operationName.add(operation.getName());
+                        }
+                    } else if (service.getConfig().getRoutes() != null) {
+                        // legacy TCP
+                        for (org.framework.core.BaseRoute route : service.getConfig().getRoutes()) {
+                            endpoints.add(protocol + CustomMethods.getLocalHostAddress() + ":" + port);
+                            operationName.add(route.getName());
                         }
                     }
 
