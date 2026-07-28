@@ -148,7 +148,7 @@ public class MockResponse {
 
     synchronized public void setResponseContent(String responseContent) {
         this.responseContent = responseContent;
-        this.responseBytes = responseContent.getBytes();
+        this.responseBytes = responseContent.getBytes(StandardCharsets.UTF_8);
         Logger.getInstance().info("service name " + this.serviceName);
         AbstractService service = ServerManager.getInstance().getServices().get(this.serviceName);
         if (!Objects.equals(this.name, "LIVE")) {
