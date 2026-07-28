@@ -1,11 +1,24 @@
 package org.framework.core;
 
+import com.stubio.util.DataFile;
+import com.stubio.util.DataSourceSelect;
+import com.stubio.util.Endpoint;
+import com.stubio.util.GenericProperty;
+import com.stubio.util.StubOperation;
+import com.stubio.util.VirtualServiceMapper;
+import com.stubio.util.VirtualServiceObject;
+
 import org.framework.config.LogConfigManager;
 import org.framework.config.ServiceConfig;
-import org.framework.config.XmlParser;
+import org.framework.constants.PathConstants;
+import org.framework.datasource.AccessMode;
+import org.framework.datasource.DataSourceDefinition;
 import org.framework.datasource.DataSourceFactory;
+import org.framework.datasource.DataSourceRegistry;
 import org.framework.datasource.DataSourceService;
+import org.framework.datasource.DataSourceType;
 import org.framework.db.Utility;
+import org.framework.properties.Properties;
 import org.framework.utils.CustomMethods;
 import org.framework.utils.FolderDeleteService;
 import org.framework.utils.Logger;
@@ -14,6 +27,7 @@ import java.io.File;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
@@ -40,7 +54,15 @@ public class ServerManager {
         return services.get(serviceName);
     }
 
-    public ParsedXMLObject parseXml(File file) throws Exception {
+    /**
+     * Parses a virtual service file with the com.stubio parser.
+     *
+     * <p>
+     * The SoapUI class remapping below is retained for Groovy script bodies that
+     * were carried over from the old format; it is inert for files that never
+     * referenced com.eviware.
+     */
+    public VirtualServiceObject parseXml(File file) throws Exception {
         String content = new String (Files.readAllBytes(file.toPath()));
         content = content.replace("com.eviware.soapui.SoapUI.globalProperties", "globalProperties");
         content = content.replace("com.eviware.soapui.support.GroovyUtils", "org.framework.utils.GroovyUtils");
@@ -48,37 +70,30 @@ public class ServerManager {
         content = content.replace("com.eviware.soapui.support.types.StringToStringsMap", "org.framework.types.StringToStringsMap");
         //System.out.println(content);
         Files.write(file.toPath(),content.getBytes() );
-        XmlParser parser = new XmlParser();
-        ParsedXMLObject parsedObj = parser.parseXml(file);
-        return parsedObj;
+
+        if (!content.contains("stubVirtualService")) {
+            throw new UnsupportedOperationException(
+                    "Not a stubVirtualService file. TCP (customMockService) and the old SoapUI formats "
+                            + "are not supported by this parser - re-export the service in the new format.");
+        }
+
+        // DocumentBuilder.parse(String) resolves its argument as a URI, so a plain
+        // path containing a space would fail here.
+        return new VirtualServiceMapper(file.toURI().toString()).getVso();
     }
 
-    public boolean deployService(ParsedXMLObject parsedObj, boolean isDeployedFromUI, String user, String backendApplication, String group, String backendType, boolean storeToMasterCatalog, String envType) throws Exception {
+    public boolean deployService(VirtualServiceObject vso, boolean isDeployedFromUI, String user, String backendApplication, String group, String backendType, boolean storeToMasterCatalog, String envType) throws Exception {
         ServiceConfig config = new ServiceConfig();
         boolean isStoredInDb = false;
         try{
-            config.setRoutes(parsedObj.getRoutes());
-            config.setPort(parsedObj.getPort());
+            config.setVirtualService(vso);
             config.setUserName(user);
-            config.setDelay(parsedObj.getDelay());
-            config.setAutoStart(parsedObj.getAutoStart());
-            config.setXmlFileContent(parsedObj.getXmlFileContent());
-            config.setServiceName(parsedObj.getName());
-            config.setAfterRequestScript(parsedObj.getAfterRequestScript());
-            config.setOnRequestScript(parsedObj.getOnRequestScript());
-            config.setStartScript(parsedObj.getStartScript());
-            config.setStopScript(parsedObj.getStopScript());
-            config.setHttpSecure(parsedObj.getHttpSecure());
-            config.setType(parsedObj.getType());
+            config.setXmlFileContent(readXmlContent(vso));
+            config.setProperties(mapProperties(vso));
+            config.setDataSourceService(new DataSourceService(buildDataSourceRegistry(vso), new DataSourceFactory()));
+
             AbstractService restService = AbstractServiceFactory.getInstance(config);
             config.setRequestHandler(RequestHandlerFactory.getInstance(config));
-            config.setProperties(parsedObj.getProperties());
-            config.setWsdlContent(parsedObj.getWsdlcontent());
-            config.setProtocol(parsedObj.getProtocol());
-            config.setRouteEndpoint(parsedObj.getRouteEndpoint());
-            config.setRouteModeEnabled(parsedObj.isRouteModeEnabled());
-            config.setDatasourceEnabled(parsedObj.isDatasource());
-            config.setDataSourceService(new DataSourceService(parsedObj.getdataSourceRegistry(), new DataSourceFactory()));
             restService.setTimestamp(LocalDateTime.now().format(DateTimeFormatter.ofPattern("MM/dd/yyyy hh:mm:ss a")));
 
             services.put(restService.getName(), restService);
@@ -135,6 +150,136 @@ public class ServerManager {
             Logger.getInstance().error("Error occurred in "+ config.getServiceName() + "\n" + sw.toString());
             return false;
         }
+    }
+
+    /** VirtualServiceObject.getXmlPath() holds the file URI we handed the mapper. */
+    private String readXmlContent(VirtualServiceObject vso) throws Exception {
+        String xmlPath = vso.getXmlPath();
+        if (xmlPath == null || xmlPath.isBlank()) {
+            return Files.readString(Paths.get(PathConstants.VS_XML_DIRECTORY, vso.getVsName() + ".xml"));
+        }
+        if (xmlPath.startsWith("file:")) {
+            return Files.readString(Paths.get(java.net.URI.create(xmlPath)));
+        }
+        return Files.readString(Paths.get(xmlPath));
+    }
+
+    /** vs:Properties/vs:Variable pairs. */
+    private Properties mapProperties(VirtualServiceObject vso) {
+        Properties properties = new Properties();
+        if (vso.getPropertyList() != null) {
+            for (GenericProperty property : vso.getPropertyList()) {
+                if (property.getKey() != null && !property.getKey().isBlank()) {
+                    properties.addProperty(property.getKey(),
+                            property.getValue() == null ? "" : property.getValue().trim());
+                }
+            }
+        }
+        return properties;
+    }
+
+    /**
+     * Builds the datasource registry from every endpoint / operation
+     * DataSourceSelect. Replaces the XPath scan in the old config.Parser.
+     * Returns null when nothing usable is declared, matching the previous
+     * behaviour that left the registry unset.
+     */
+    private DataSourceRegistry buildDataSourceRegistry(VirtualServiceObject vso) {
+        DataSourceRegistry registry = new DataSourceRegistry();
+        boolean registered = false;
+
+        if (vso.getRestService() != null) {
+            for (Endpoint endpoint : vso.getRestService().getEndpoints()) {
+                registered |= registerFiles(endpoint.getDataSourceSelect(), registry, vso.getVsName());
+            }
+        }
+        if (vso.getSoapService() != null) {
+            for (StubOperation operation : vso.getSoapService().getStubOperations()) {
+                registered |= registerFiles(operation.getDataSourceSelect(), registry, vso.getVsName());
+            }
+        }
+
+        if (!registered) {
+            Logger.getInstance().info("DataSource is not enabled for service " + vso.getVsName());
+            return null;
+        }
+        return registry;
+    }
+
+    private boolean registerFiles(DataSourceSelect select, DataSourceRegistry registry, String serviceName) {
+        if (select == null || select.getFile() == null) {
+            return false;
+        }
+
+        boolean registered = false;
+        for (DataFile file : select.getFile()) {
+            DataSourceType dataSourceType = mapFileType(file.getFileType());
+            if (dataSourceType == null) {
+                // e.g. a <vs:File> carrying only <vs:RequestColumnMappings/>
+                continue;
+            }
+
+            String name = firstNonBlank(file.getDsName(), file.getConnectionName());
+            String fileLocation = file.getFileLocation() == null ? "" : file.getFileLocation().trim();
+            if (name == null || fileLocation.isEmpty()) {
+                Logger.getInstance().info("Skipping incomplete file DataSource for service " + serviceName);
+                continue;
+            }
+
+            String fileName = Paths.get(fileLocation).getFileName().toString();
+            String datasetPath = PathConstants.DATASET_BASE_PATH + serviceName + File.separator + fileName;
+
+            registry.register(new DataSourceDefinition(name, dataSourceType, mapAccessMode(file.getMappingType()))
+                    .addProperty("filePath", datasetPath)
+                    .addProperty("worksheet", file.getSheet())
+                    .addProperty("headerRowIndex", 0));
+
+            registered = true;
+            Logger.getInstance().info("Registered File DataSource: " + name + " with type " + dataSourceType);
+        }
+
+        return registered;
+    }
+
+    private DataSourceType mapFileType(String fileType) {
+        if (fileType == null) {
+            return null;
+        }
+        switch (fileType.trim().toUpperCase()) {
+            case "EXCEL":
+                return DataSourceType.EXCEL;
+            case "CSV":
+                return DataSourceType.CSV;
+            case "XML":
+                return DataSourceType.CSV;
+            default:
+                return null;
+        }
+    }
+
+    /** MappingType replaces the old FetchType element. */
+    private AccessMode mapAccessMode(String mappingType) {
+        if (mappingType == null || mappingType.isBlank()) {
+            return AccessMode.QUERY;
+        }
+        switch (mappingType.trim().toUpperCase()) {
+            case "SEQUENTIAL":
+                return AccessMode.SEQUENTIAL;
+            case "RANDOM":
+                return AccessMode.RANDOM;
+            default:
+                return AccessMode.QUERY;
+        }
+    }
+
+    private String firstNonBlank(String first, String second) {
+        if (first != null && !first.isBlank()) {
+            return first.trim();
+        }
+        if (second != null && !second.isBlank()) {
+            return second.trim();
+        }
+        return null;
     }
 
     public boolean startService(String serviceName){

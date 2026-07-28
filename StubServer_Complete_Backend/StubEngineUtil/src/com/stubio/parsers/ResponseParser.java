@@ -99,13 +99,15 @@ public final class ResponseParser {
             for (Element field :
                     XmlUtils.childElements(headerNode)) {
 
+                // The SOAP sample writes <vs:key> in lower case, REST writes
+                // <vs:Key>; accept either so header names are never dropped.
                 switch (XmlUtils.local(field)) {
 
-                    case "Key" ->
+                    case "Key", "key" ->
                             property.setKey(
                                     XmlUtils.text(field));
 
-                    case "Value" ->
+                    case "Value", "value" ->
                             property.setValue(
                                     XmlUtils.text(field));
                 }

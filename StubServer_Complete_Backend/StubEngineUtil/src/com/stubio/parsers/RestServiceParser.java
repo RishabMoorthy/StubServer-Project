@@ -12,9 +12,16 @@ public final class RestServiceParser {
 
         RestService service = new RestService();
         vso.setVsType("rest");
-        vso.setPort(
-                Integer.parseInt(
-                        node.getAttribute("port")));
+
+        // VirtualServiceMapper has already parsed this attribute safely; guard
+        // here too so a service without a port attribute does not throw.
+        String port = node.getAttribute("port");
+        if (!port.isBlank()) {
+            try {
+                vso.setPort(Integer.parseInt(port.trim()));
+            } catch (NumberFormatException ignored) {
+            }
+        }
 
         vso.setHost(
                 node.getAttribute("host"));

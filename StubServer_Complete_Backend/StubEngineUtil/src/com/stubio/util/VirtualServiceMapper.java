@@ -115,7 +115,7 @@ public class VirtualServiceMapper {
 
                 case "CustomScripts" ->
                         vs.setCustomScripts(
-                                parseCustomScripts(child));
+                                ScriptParser.parseCustomScripts(child));
 
                 case "Config" ->
                         ConfigParser.parse(child, vs);
@@ -188,31 +188,4 @@ public class VirtualServiceMapper {
                                 "isSecured")));
     }
 
-    private LinkedHashMap<String, Script> parseCustomScripts(
-            Element customScriptsNode) {
-
-        LinkedHashMap<String, Script> scripts =
-                new LinkedHashMap<>();
-
-        for (Element scriptNode :
-                XmlUtils.childElements(customScriptsNode)) {
-
-            if (!"CustomScript".equals(
-                    XmlUtils.local(scriptNode))) {
-                continue;
-            }
-
-            ScriptParser scriptParser = new ScriptParser();
-            Script script = scriptParser.parse(scriptNode);
-
-            if (script.getScriptType() != null
-                    && !script.getScriptType().isBlank()) {
-
-                scripts.put(
-                        script.getScriptType(),
-                        script);
-            }
-        }
-        return scripts;
-    }
 }

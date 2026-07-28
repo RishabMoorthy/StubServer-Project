@@ -1,5 +1,6 @@
 package org.framework;
 
+import com.stubio.util.VirtualServiceObject;
 import org.framework.config.LogConfigManager;
 import org.framework.core.*;
 import org.common.db.*;
@@ -72,7 +73,7 @@ public class Main {
                             File file = new File(fileDir, serviceList.getJSONObject(index).get("serviceName") + ".xml");
                             String xmlContent = Files.readString(file.toPath());
 
-                            ParsedXMLObject parsedObj = ServerManager.getInstance().parseXml(file);
+                            VirtualServiceObject parsedObj = ServerManager.getInstance().parseXml(file);
                             // NOTE: original parameter list was partially obscured/blurry in the
                             // source photo; verify this against the real source before compiling.
                             ServerManager.getInstance().deployService(parsedObj, false, "default", "", "",
