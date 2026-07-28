@@ -22,6 +22,7 @@ import javax.xml.xpath.XPathFactory;
 import java.io.File;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
@@ -215,7 +216,8 @@ public class SoapXmlParser extends Parser {
             }
 
             // Create MockResponse object
-            MockResponse mockResponse = new MockResponse(name, statusCode, responseBody.getBytes(), responseScript);
+            MockResponse mockResponse = new MockResponse(name, statusCode,
+                    responseBody.getBytes(StandardCharsets.UTF_8), responseScript);
             mockResponses.add(mockResponse);
         }
 

@@ -22,6 +22,7 @@ import javax.xml.xpath.XPathFactory;
 import java.io.File;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
@@ -217,7 +218,8 @@ public class RestXmlParser extends Parser {
             Headers headers = parseHeaders(mediaType);
 
             // Create MockResponse object
-            MockResponse mockResponse = new MockResponse(name, headers, statusCode, responseBody.getBytes(),
+            MockResponse mockResponse = new MockResponse(name, headers, statusCode,
+                    responseBody.getBytes(StandardCharsets.UTF_8),
                     responseScript, operationName, serviceName);
             mockResponses.add(mockResponse);
         }
@@ -227,7 +229,13 @@ public class RestXmlParser extends Parser {
 
     private Headers parseHeaders(String mediaType) {
         Headers headers = new Headers();
-        headers.add("Content-Type", mediaType);
+        String contentType = (mediaType != null && !mediaType.isBlank())
+                ? mediaType
+                : "application/json";
+        if (!contentType.toLowerCase().contains("charset")) {
+            contentType += "; charset=UTF-8";
+        }
+        headers.add("Content-Type", contentType);
         return headers;
     }
 
