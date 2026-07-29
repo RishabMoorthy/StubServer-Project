@@ -2,6 +2,7 @@ package org.framework.properties;
 
 import groovy.lang.GroovyObjectSupport;
 import org.framework.core.AbstractService;
+import org.framework.core.BaseRoute;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -13,21 +14,15 @@ public class Context extends GroovyObjectSupport {
         this.mockService = mockService;
     }
 
-    /**
-     * The operation currently being dispatched. Bound into Groovy scripts as
-     * "mockOperation". Since the migration this is a com.stubio Endpoint or
-     * StubOperation for REST/SOAP, and still a BaseRoute for legacy TCP - hence
-     * Object rather than a single type.
-     */
-    public Object getMockOperation() {
+    public BaseRoute getMockOperation() {
         return mockOperation;
     }
 
-    public void setMockOperation(Object mockOperation) {
+    public void setMockOperation(BaseRoute mockOperation) {
         this.mockOperation = mockOperation;
     }
 
-    private Object mockOperation;
+    private BaseRoute mockOperation;
 
     private final Map<String, Object> dynamicProperties = new HashMap<>();
 

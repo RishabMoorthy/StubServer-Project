@@ -10,12 +10,12 @@ import java.io.IOException;
 public class AbstractServiceFactory {
     public static AbstractService getInstance(ServiceConfig config) throws IOException {
         AbstractService service = null;
-        if ("Rest".equals(config.getType())) {
+        if (config.getType().equals("Rest")) {
             service = new RestService(config);
-        } else if ("Soap".equals(config.getType())) {
+        } else if (config.getType().equals("Soap")) {
             service = new SoapService(config);
         }
-        else if ("Tcp".equals(config.getType())) {
+        else if (config.getType().equals("Tcp")) {
             service = new TCPService(config);
         }
         return service;
