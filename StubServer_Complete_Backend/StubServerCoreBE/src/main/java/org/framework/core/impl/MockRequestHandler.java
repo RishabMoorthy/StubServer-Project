@@ -74,6 +74,7 @@ public class MockRequestHandler implements RequestHandler {
             updateParams(endpoint, context, request);
         }
         return hasMatch;
+
     }
 
     /** Was RestRoute.matchPath(). */

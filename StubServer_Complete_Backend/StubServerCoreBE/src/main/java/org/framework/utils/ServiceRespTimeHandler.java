@@ -12,8 +12,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import com.vs.met.VSMetricsResptoDB;
-
 public class ServiceRespTimeHandler {
 
     private static final long FLUSH_INTERVAL_MS = 60_000L; // 1 minute
@@ -161,9 +159,9 @@ public class ServiceRespTimeHandler {
 
         // Persist
         try {
-            com.vs.met.VSMetricsResptoDB vsm = new com.vs.met.VSMetricsResptoDB();
+            VSMetricsResptoDB vsm = new VSMetricsResptoDB();
             String msg = vsm.saveRespMetrics(vsname, CustomMethods.getLocalHostAddress(),
-                    insertStartTime, insertEndTime, total, count, max);
+                    insertStartTime, insertEndTime, count, max);
             System.out.println("DB Save: " + msg);
         } catch (Exception e) {
             System.err.println("DB saveRespMetrics failed: " + e.getMessage());

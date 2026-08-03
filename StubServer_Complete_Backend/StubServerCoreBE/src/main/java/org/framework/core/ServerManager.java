@@ -64,10 +64,6 @@ public class ServerManager {
      */
     public VirtualServiceObject parseXml(File file) throws Exception {
         String content = new String (Files.readAllBytes(file.toPath()));
-        content = content.replace("com.eviware.soapui.SoapUI.globalProperties", "globalProperties");
-        content = content.replace("com.eviware.soapui.support.GroovyUtils", "org.framework.utils.GroovyUtils");
-        content = content.replace("groovy.util.XmlSlurper", "groovy.xml.XmlSlurper");
-        content = content.replace("com.eviware.soapui.support.types.StringToStringsMap", "org.framework.types.StringToStringsMap");
         //System.out.println(content);
         Files.write(file.toPath(),content.getBytes() );
 
@@ -118,7 +114,7 @@ public class ServerManager {
                 }
                 boolean isStoredInMasterCatalog = false;
                 if(storeToMasterCatalog)
-                    isStoredInMasterCatalog = Utility.getInstance().storeServiceInMasterCatalog(restService.getName(), restService.backendApplication, group, backendType, envType);
+                    isStoredInMasterCatalog = Utility.getInstance().storeServiceInMasterCatalog(restService.getName(), restService, backendApplication, group, backendType, envType);
                 isStoredInDb =  Utility.getInstance().storeServiceInDataBase(restService.getName(), restService, isDeployedFromUI);
                 if(!(isStoredInDb)){
                     try{

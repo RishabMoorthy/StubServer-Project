@@ -12,7 +12,6 @@ import com.sun.net.httpserver.Headers;
 import org.framework.core.expansion.TemplateReplacer;
 import org.framework.core.impl.GroovyScriptExecutor;
 import org.framework.core.impl.GroovyScriptResponseGenerator;
-import org.framework.core.impl.SequenceResponseGenerator;
 import org.framework.properties.Context;
 import org.framework.properties.MockRequest;
 import org.framework.properties.MockResponse;
@@ -46,14 +45,32 @@ import java.util.regex.Pattern;
  * Groovy scripts mutate the live MockResponse via setResponseContent() /
  * setBinaryData() and expect those edits to persist, exactly as they did when
  * BaseRoute owned the list.
+ *
+ * <p>
+ * An Endpoint/StubOperation can declare several RRPairs. They are evaluated in
+ * XML document order on every request - the CA DevTest-style chain the new
+ * contract expects - and the first pair that produces a response wins:
+ * a Script pair "produces a response" when its MatchScript returns a name; an
+ * Operation pair (or any non-Script style) produces one when its own
+ * {@code vs:Request} criteria match the live request. A pair that declines
+ * falls through to the next one. If none match, {@code defaultRR} names the
+ * pair to fall back to, preserving old single-pair behaviour for the common
+ * case of one RRPair per endpoint/operation.
  */
 public class ResponseResolver {
 
-    /** Runtime state for one Endpoint or StubOperation. */
-    private static final class OperationRuntime {
-        ResponseGenerator generator;
+    /** Runtime state for a single RRPair within an Endpoint/StubOperation. */
+    private static final class PairRuntime {
+        RRPair pair;
+        ResponseGenerator scriptGenerator; // non-null only for MatchStyle=Script
         List<MockResponse> responses;
-        String defaultResponse;
+        String defaultResponseName;
+    }
+
+    /** Runtime state for one Endpoint or StubOperation: its RRPair chain. */
+    private static final class OperationRuntime {
+        List<PairRuntime> pairs = new ArrayList<>();
+        String defaultRR;
         String contentType;
     }
 
@@ -68,26 +85,40 @@ public class ResponseResolver {
 
     public void register(Endpoint endpoint) {
         OperationRuntime runtime = new OperationRuntime();
-        RRPair primary = primaryPair(endpoint.getRrList(), endpoint.getDefaultRR());
-
-        runtime.generator = generatorFor(primary);
-        runtime.responses = restResponses(endpoint);
-        runtime.defaultResponse = defaultResponseName(primary, runtime.responses);
+        runtime.defaultRR = endpoint.getDefaultRR();
         runtime.contentType = "";
+
+        for (RRPair pair : endpoint.getRrList()) {
+            runtime.pairs.add(buildPairRuntime(pair, restResponses(pair, endpoint.getPath())));
+        }
 
         runtimes.put(endpoint, runtime);
     }
 
     public void register(StubOperation operation) {
         OperationRuntime runtime = new OperationRuntime();
-        RRPair primary = primaryPair(operation.getRrList(), operation.getDefaultRR());
-
-        runtime.generator = generatorFor(primary);
-        runtime.responses = soapResponses(operation);
-        runtime.defaultResponse = defaultResponseName(primary, runtime.responses);
+        runtime.defaultRR = operation.getDefaultRR();
         runtime.contentType = "Xml";
 
+        for (RRPair pair : operation.getRrList()) {
+            runtime.pairs.add(buildPairRuntime(pair, soapResponses(pair)));
+        }
+
         runtimes.put(operation, runtime);
+    }
+
+    private PairRuntime buildPairRuntime(RRPair pair, List<MockResponse> responses) {
+        PairRuntime runtime = new PairRuntime();
+        runtime.pair = pair;
+        runtime.responses = responses;
+        runtime.defaultResponseName = defaultResponseName(pair, responses);
+        runtime.scriptGenerator = isScriptStyle(pair) ? generatorFor(pair) : null;
+        return runtime;
+    }
+
+    private boolean isScriptStyle(RRPair pair) {
+        return pair.getResponseSelection() != null
+                && "Script".equalsIgnoreCase(trimToEmpty(pair.getResponseSelection().getMatchStyle()));
     }
 
     // ---- resolution (request time) ----
@@ -102,7 +133,10 @@ public class ResponseResolver {
         return processResponse(operation, context, resp, request);
     }
 
-    /** Was BaseRoute.getMockResponse(). */
+    /**
+     * Was BaseRoute.getMockResponse(). Walks the operation's RRPair chain in
+     * document order; the first pair that matches wins.
+     */
     public MockResponse getMockResponse(Object operation, Context context, MockRequest request)
             throws UnsupportedEncodingException {
 
@@ -111,44 +145,117 @@ public class ResponseResolver {
             return null;
         }
 
-        String response = runtime.generator.GenerateResponse(context, request);
-        if (response == null) {
-            return getDefaultResponse(runtime);
+        for (PairRuntime pair : runtime.pairs) {
+            if (pair.scriptGenerator != null) {
+                MockResponse resp = resolveScriptPair(pair, context, request);
+                if (resp != null) {
+                    System.out.println("[RRPairChain] pair=" + pair.pair.getId() + " style=Script matched -> " + resp.getName());
+                    return resp;
+                }
+                System.out.println("[RRPairChain] pair=" + pair.pair.getId() + " style=Script declined, trying next");
+                continue;
+            }
+
+            if (RRPairRequestMatcher.matches(pair.pair.getRequest(), context, request)) {
+                MockResponse resp = findByName(pair.responses, pair.defaultResponseName);
+                if (resp != null) {
+                    System.out.println("[RRPairChain] pair=" + pair.pair.getId() + " style=Operation matched -> " + resp.getName());
+                    return resp;
+                }
+            }
+            System.out.println("[RRPairChain] pair=" + pair.pair.getId() + " style=Operation declined, trying next");
         }
 
-        if (response.equals("LIVE")) {
+        MockResponse fallback = fallbackResponse(runtime);
+        System.out.println("[RRPairChain] no pair matched, falling back to defaultRR=" + runtime.defaultRR
+                + " -> " + (fallback == null ? "null" : fallback.getName()));
+        return fallback;
+    }
+
+    /**
+     * Runs a Script-style pair's MatchScript. A null result means the pair
+     * declined - the caller moves on to the next pair in the chain. "LIVE" is
+     * a script-level escape hatch to force live invocation for this request.
+     */
+    private MockResponse resolveScriptPair(PairRuntime pair, Context context, MockRequest request) {
+        String responseName = pair.scriptGenerator.GenerateResponse(context, request);
+        if (responseName == null) {
+            return null;
+        }
+        if (responseName.equals("LIVE")) {
             return new MockResponse(this.serviceName, "LIVE");
         }
 
-        for (MockResponse resp : runtime.responses) {
-            if (resp.getName().equals(response)) {
+        MockResponse resp = findByName(pair.responses, responseName);
+        if (resp != null) {
+            return resp;
+        }
+        // Script named a response that doesn't exist in its own ResponseSet -
+        // treat as "matched, use this pair's default" rather than failing the
+        // whole chain over a typo.
+        return findByName(pair.responses, pair.defaultResponseName);
+    }
+
+    private MockResponse findByName(List<MockResponse> responses, String name) {
+        if (name == null) {
+            return null;
+        }
+        for (MockResponse resp : responses) {
+            if (resp.getName().equals(name)) {
                 return resp;
             }
         }
-
-        return getDefaultResponse(runtime);
+        return null;
     }
 
-    /** Was BaseRoute.getDefaultResponse(). */
-    private MockResponse getDefaultResponse(OperationRuntime runtime) {
-        for (MockResponse response : runtime.responses) {
-            if (response.getName().equals(runtime.defaultResponse)) {
-                return response;
+    /**
+     * Same shape as the "no endpoint/operation matched" 404 in
+     * MockRequestHandler/SoapRequestHandler, for the case where an
+     * endpoint/operation matched but its RRPair chain had nothing to serve.
+     */
+    private MockResponse noResponseConfigured() {
+        Headers headers = new Headers();
+        headers.add("content-type", "plain/text");
+        String out = "No response is configured for this request";
+        return new MockResponse("No Response Configured", headers, 404,
+                out.getBytes(StandardCharsets.UTF_8), "", "", serviceName);
+    }
+
+    /** No pair in the chain matched - fall back to the designated defaultRR pair. */
+    private MockResponse fallbackResponse(OperationRuntime runtime) {
+        for (PairRuntime pair : runtime.pairs) {
+            if (pair.pair.getId() != null && pair.pair.getId().equals(runtime.defaultRR)) {
+                MockResponse resp = findByName(pair.responses, pair.defaultResponseName);
+                if (resp != null) {
+                    return resp;
+                }
             }
         }
-        return runtime.responses.isEmpty() ? null : runtime.responses.get(0);
+        for (PairRuntime pair : runtime.pairs) {
+            MockResponse resp = findByName(pair.responses, pair.defaultResponseName);
+            if (resp != null) {
+                return resp;
+            }
+        }
+        return null;
     }
 
     /** Was BaseRoute.processResponse(). */
     public MockResponse processResponse(Object operation, Context context, MockResponse resp, MockRequest request)
             throws Exception {
 
+        // getMockResponse() returns null when the endpoint/operation matched but its
+        // RRPair chain produced nothing usable (no pair matched, and none had a
+        // fallback default). Without this, LiveInvocation.getLiveResponse() and the
+        // plain-mock path below both dereference resp directly and NPE instead of
+        // giving the caller a real HTTP response.
+        if (resp == null) {
+            resp = noResponseConfigured();
+        }
+
         if (context.getMockService().getConfig().isRouteModeEnabled()) {
             LiveInvocation liveinvocation = new LiveInvocation();
             return liveinvocation.getLiveResponse(context, request, resp);
-        }
-        if (resp == null) {
-            return resp;
         }
 
         if (resp.getScript() != null && !resp.getScript().isEmpty()) {
@@ -226,9 +333,17 @@ public class ResponseResolver {
 
     // ---- accessors kept for parity with the old route API ----
 
+    /** Aggregates responses across every RRPair in the operation's chain. */
     public List<MockResponse> getResponses(Object operation) {
         OperationRuntime runtime = runtimes.get(operation);
-        return runtime == null ? new ArrayList<>() : runtime.responses;
+        if (runtime == null) {
+            return new ArrayList<>();
+        }
+        List<MockResponse> all = new ArrayList<>();
+        for (PairRuntime pair : runtime.pairs) {
+            all.addAll(pair.responses);
+        }
+        return all;
     }
 
     public MockResponse getMockResponseByName(Object operation, String mockResponseName) {
@@ -240,48 +355,27 @@ public class ResponseResolver {
         return null;
     }
 
+    /** SCRIPT if any RRPair in the chain is Script-style, SEQUENCE otherwise. */
     public String getDispatchStyle(Object operation) {
         OperationRuntime runtime = runtimes.get(operation);
         if (runtime == null) {
             return "SEQUENCE";
         }
-        return runtime.generator instanceof GroovyScriptResponseGenerator ? "SCRIPT" : "SEQUENCE";
+        for (PairRuntime pair : runtime.pairs) {
+            if (pair.scriptGenerator != null) {
+                return "SCRIPT";
+            }
+        }
+        return "SEQUENCE";
     }
 
     // ---- building runtime state from the com.stubio model ----
 
-    /**
-     * The old format declared one dispatch style per operation; in the new model
-     * it lives on the RRPair. The pair referenced by defaultRR drives the
-     * operation, falling back to the first pair.
-     */
-    private RRPair primaryPair(List<RRPair> pairs, String defaultRR) {
-        if (pairs == null || pairs.isEmpty()) {
-            return null;
-        }
-        if (defaultRR != null && !defaultRR.isBlank()) {
-            for (RRPair pair : pairs) {
-                if (defaultRR.equals(pair.getId())) {
-                    return pair;
-                }
-            }
-        }
-        return pairs.get(0);
-    }
-
     private ResponseGenerator generatorFor(RRPair pair) {
-        boolean scriptStyle = pair != null
-                && pair.getResponseSelection() != null
-                && "Script".equalsIgnoreCase(trimToEmpty(pair.getResponseSelection().getMatchStyle()));
-
-        if (scriptStyle) {
-            String script = pair.getResponseSelection().getMatchScript() == null
-                    ? ""
-                    : trimToEmpty(pair.getResponseSelection().getMatchScript().getScript());
-            return new GroovyScriptResponseGenerator(script);
-        }
-
-        return new SequenceResponseGenerator();
+        String script = pair.getResponseSelection().getMatchScript() == null
+                ? ""
+                : trimToEmpty(pair.getResponseSelection().getMatchScript().getScript());
+        return new GroovyScriptResponseGenerator(script);
     }
 
     private String defaultResponseName(RRPair pair, List<MockResponse> responses) {
@@ -292,25 +386,23 @@ public class ResponseResolver {
     }
 
     /**
-     * REST responses carry headers, the operation path and the service name so
+     * REST responses carry headers, the endpoint path and the service name so
      * that runtime edits from Groovy can be written back.
      */
-    private List<MockResponse> restResponses(Endpoint endpoint) {
+    private List<MockResponse> restResponses(RRPair pair, String path) {
         List<MockResponse> mockResponses = new ArrayList<>();
-        for (RRPair pair : endpoint.getRrList()) {
-            if (pair.getResponseSet() == null) {
-                continue;
-            }
-            for (Response response : pair.getResponseSet()) {
-                mockResponses.add(new MockResponse(
-                        trimToEmpty(response.getName()),
-                        responseHeaders(response),
-                        response.getStatusCode(),
-                        bodyBytes(response),
-                        scriptOf(response.getResponseScript()),
-                        endpoint.getPath(),
-                        serviceName));
-            }
+        if (pair.getResponseSet() == null) {
+            return mockResponses;
+        }
+        for (Response response : pair.getResponseSet()) {
+            mockResponses.add(new MockResponse(
+                    trimToEmpty(response.getName()),
+                    responseHeaders(response),
+                    response.getStatusCode(),
+                    bodyBytes(response),
+                    scriptOf(response.getResponseScript()),
+                    path,
+                    serviceName));
         }
         return mockResponses;
     }
@@ -319,19 +411,17 @@ public class ResponseResolver {
      * SOAP keeps the header-less construction the old SoapXmlParser used, so
      * SoapService's own content-type defaulting is unaffected.
      */
-    private List<MockResponse> soapResponses(StubOperation operation) {
+    private List<MockResponse> soapResponses(RRPair pair) {
         List<MockResponse> mockResponses = new ArrayList<>();
-        for (RRPair pair : operation.getRrList()) {
-            if (pair.getResponseSet() == null) {
-                continue;
-            }
-            for (Response response : pair.getResponseSet()) {
-                mockResponses.add(new MockResponse(
-                        trimToEmpty(response.getName()),
-                        response.getStatusCode(),
-                        bodyBytes(response),
-                        scriptOf(response.getResponseScript())));
-            }
+        if (pair.getResponseSet() == null) {
+            return mockResponses;
+        }
+        for (Response response : pair.getResponseSet()) {
+            mockResponses.add(new MockResponse(
+                    trimToEmpty(response.getName()),
+                    response.getStatusCode(),
+                    bodyBytes(response),
+                    scriptOf(response.getResponseScript())));
         }
         return mockResponses;
     }

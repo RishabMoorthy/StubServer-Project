@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/StubServerCoreBE.iml" filepath="$PROJECT_DIR$/StubServerCoreBE.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../StubEngineUtil/StubEngineUtil.iml" filepath="$PROJECT_DIR$/../StubEngineUtil/StubEngineUtil.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../hibernate/hibernate.iml" filepath="$PROJECT_DIR$/../hibernate/hibernate.iml" />
+    </modules>
+  </component>
+</project>
