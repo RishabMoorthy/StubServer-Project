@@ -75,6 +75,13 @@ public class GroovyScriptExecutor {
             Script script = InvokerHelper.createScript(cls, binding);
 
             Object result = script.run();
+            if (result == null) {
+                // A script that returns nothing means "no opinion" (e.g. a match
+                // script declining a request) - String.valueOf(null) would turn
+                // that into the literal string "null" and callers that check
+                // `!= null` would treat it as a match instead of a decline.
+                return null;
+            }
             return (result instanceof String) ? (String) result : String.valueOf(result);
         } catch (Exception e) {
             // Logger.getInstance().error("Error running Groovy script", e);
